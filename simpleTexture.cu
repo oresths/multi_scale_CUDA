@@ -42,6 +42,11 @@
 
 #define MAX_EPSILON_ERROR 5e-3f
 
+#define SCALED_WIDTH 64
+#define SCALED_HEIGHT 64
+
+#define SCALES 33
+
 
 // Define the files that are to be save and the reference images for validation
 const char *imageFilename = "lena_bw.pgm";
@@ -51,7 +56,10 @@ const char *sampleName = "simpleTexture";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constants
-const float scale = 0.8f;
+//const float scale = 0.8f;
+
+__constant__ float d_scale_factors[512];
+__constant__ uint8_t d_scales;
 
 // Texture reference for 2D float texture
 texture<float, 2, cudaReadModeElementType> tex;
@@ -63,25 +71,67 @@ bool testResult = true;
 //! Transform an image using texture lookups
 //! @param outputData  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-__global__ void transformKernel(float *outputData,
+/*__global__ void transformKernel(float *outputData,
                                 int width,
-                                int height,
-                                int scaled_width,
-                                int scaled_height)
+                                int height
+                                )
 {
+	int scaled_width = SCALED_WIDTH;
+	int scaled_height = SCALED_HEIGHT;
+
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 
-    // read from texture and write to global memory
-	for (int i = x; i < scaled_width; i += gridDim.x * blockDim.x) {
-		for (int j = y; j < scaled_height; j += gridDim.y * blockDim.y) {
-			outputData[j * scaled_width + i] = tex2D(tex,
-					(float) i / scaled_width, (float) j / scaled_height);
-		}
-	}
-}
+	outputData[y * scaled_width + x] = tex2D(tex,
+					(float) x / scaled_width, (float) y / scaled_height);
 
+    // read from texture and write to global memory
+//	for (int i = x; i < scaled_width; i += gridDim.x * blockDim.x) {
+//		for (int j = y; j < scaled_height; j += gridDim.y * blockDim.y) {
+//			outputData[j * scaled_width + i] = tex2D(tex,
+//					(float) i / scaled_width, (float) j / scaled_height);
+//		}
+//	}
+}*/
+
+/*__global__ void transformKernel(float *outputData,
+                                int width,
+                                int height
+                                )
+{
+	int scaled_width = SCALED_WIDTH;
+	int scaled_height = SCALED_HEIGHT;
+	float upper = 0.53;
+	float lower = 0.48;
+
+    // calculate normalized texture coordinates
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+
+    outputData[y * scaled_width + x] = tex2D(tex,
+    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+
+}*/
+
+__global__ void transformKernel(float *outputData,
+                                int width,
+                                int height
+                                )
+{
+	int scaled_width = SCALED_WIDTH;
+	int scaled_height = SCALED_HEIGHT;
+	float upper = (d_scale_factors[0] + 1) * 0.5;
+	float lower = (1 - d_scale_factors[0]) * 0.5;
+
+    // calculate normalized texture coordinates
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+
+    outputData[y * scaled_width + x] = tex2D(tex,
+    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+
+}
 ////////////////////////////////////////////////////////////////////////////////
 // Declaration, forward
 void runTest(int argc, char **argv);
@@ -152,10 +202,23 @@ void runTest(int argc, char **argv)
     sdkLoadPGM(imagePath, &hData, &width, &height);
 
     unsigned int size = width * height * sizeof(float);
-    unsigned int scaled_width_size = floor(scale * width) * sizeof(float);
-    unsigned int scaled_height_size = floor(scale * height) * sizeof(float);
-    unsigned int scaled_width = floor(scale * width);
-    unsigned int scaled_height = floor(scale * height);
+    unsigned int scaled_width = SCALED_WIDTH; //floor(scale * width);
+    unsigned int scaled_height = SCALED_HEIGHT; //floor(scale * height);
+    unsigned int scaled_width_size = scaled_width * sizeof(float);
+    unsigned int scaled_height_size = scaled_height * sizeof(float);
+
+    float scale_step = 1.02;
+    uint8_t scales = SCALES;
+    float scale_factors[scales];
+
+    for (int i=0; i<scales ; i++) {
+    	scale_factors[i] = pow(scale_step, i+1);
+    }
+
+    for (int i=0; i<scales ; i++) {
+    	scale_factors[i] = scale_factors[i] / scale_factors[scales-1];
+    }
+
     printf("Loaded '%s', %d x %d pixels\n", imageFilename, width, height);
 
     //Load reference image from image (output)
@@ -169,6 +232,9 @@ void runTest(int argc, char **argv)
     }
 
     sdkLoadPGM(refPath, &hDataRef, &width, &height);
+
+    checkCudaErrors(cudaMemcpyToSymbol(d_scale_factors, scale_factors, scales*sizeof(float)));
+    checkCudaErrors(cudaMemcpyToSymbol(d_scales, &scales, sizeof(uint8_t)));
 
     // Allocate device memory for result
     float *dData = NULL;
@@ -190,8 +256,8 @@ void runTest(int argc, char **argv)
                                       cudaMemcpyHostToDevice));
 
     // Set texture parameters
-    tex.addressMode[0] = cudaAddressModeWrap;
-    tex.addressMode[1] = cudaAddressModeWrap;
+    tex.addressMode[0] = cudaAddressModeClamp;
+    tex.addressMode[1] = cudaAddressModeClamp;
     tex.filterMode = cudaFilterModeLinear;
     tex.normalized = true;    // access with normalized texture coordinates
 
@@ -199,10 +265,10 @@ void runTest(int argc, char **argv)
     checkCudaErrors(cudaBindTextureToArray(tex, cuArray, channelDesc));
 
     dim3 dimBlock(8, 8, 1);
-    dim3 dimGrid(width / dimBlock.x, height / dimBlock.y, 1);
+    dim3 dimGrid(scaled_width / dimBlock.x, scaled_height / dimBlock.y, 1);
 
     // Warmup
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, scaled_width, scaled_height);
+    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
 
     checkCudaErrors(cudaDeviceSynchronize());
     StopWatchInterface *timer = NULL;
@@ -210,7 +276,7 @@ void runTest(int argc, char **argv)
     sdkStartTimer(&timer);
 
     // Execute the kernel
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, scaled_width, scaled_height);
+    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
