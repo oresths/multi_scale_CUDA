@@ -42,7 +42,6 @@
 
 #define MAX_EPSILON_ERROR 5e-3f
 
-#define SCALE 2
 
 // Define the files that are to be save and the reference images for validation
 const char *imageFilename = "lena_bw.pgm";
@@ -52,7 +51,7 @@ const char *sampleName = "simpleTexture";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constants
-const float angle = 0.5f;        // angle to rotate image by (in radians)
+const float scale = 0.8f;
 
 // Texture reference for 2D float texture
 texture<float, 2, cudaReadModeElementType> tex;
@@ -67,29 +66,20 @@ bool testResult = true;
 __global__ void transformKernel(float *outputData,
                                 int width,
                                 int height,
-                                float theta)
+                                int scaled_width,
+                                int scaled_height)
 {
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 
-//    float u = (float)x - (float)width/2;
-//    float v = (float)y - (float)height/2;
-//    float tu = u*cosf(theta) - v*sinf(theta);
-//    float tv = v*cosf(theta) + u*sinf(theta);
-//
-//    tu /= (float)width;
-//    tv /= (float)height;
-
-     for (int i=x; i<width*SCALE; i += gridDim.x*blockDim.x) {
-    	 for (int j=y; j<height*SCALE; j += gridDim.y*blockDim.y) {
-    		 outputData[j*width*SCALE + i] = tex2D(tex, (float)i/1024, (float)j/1024);
-    	 }
-     }
-
-
     // read from texture and write to global memory
-//    outputData[y*width + x] = tex2D(tex, tu+0.5f, tv+0.5f);
+	for (int i = x; i < scaled_width; i += gridDim.x * blockDim.x) {
+		for (int j = y; j < scaled_height; j += gridDim.y * blockDim.y) {
+			outputData[j * scaled_width + i] = tex2D(tex,
+					(float) i / scaled_width, (float) j / scaled_height);
+		}
+	}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -162,6 +152,10 @@ void runTest(int argc, char **argv)
     sdkLoadPGM(imagePath, &hData, &width, &height);
 
     unsigned int size = width * height * sizeof(float);
+    unsigned int scaled_width_size = floor(scale * width) * sizeof(float);
+    unsigned int scaled_height_size = floor(scale * height) * sizeof(float);
+    unsigned int scaled_width = floor(scale * width);
+    unsigned int scaled_height = floor(scale * height);
     printf("Loaded '%s', %d x %d pixels\n", imageFilename, width, height);
 
     //Load reference image from image (output)
@@ -176,10 +170,9 @@ void runTest(int argc, char **argv)
 
     sdkLoadPGM(refPath, &hDataRef, &width, &height);
 
-    int scale = SCALE;
     // Allocate device memory for result
     float *dData = NULL;
-    checkCudaErrors(cudaMalloc((void **) &dData, scale*scale*size));
+    checkCudaErrors(cudaMalloc((void **) &dData, scaled_width_size * scaled_height_size));
 
     // Allocate array and copy image data
     cudaChannelFormatDesc channelDesc =
@@ -209,7 +202,7 @@ void runTest(int argc, char **argv)
     dim3 dimGrid(width / dimBlock.x, height / dimBlock.y, 1);
 
     // Warmup
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, angle);
+    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, scaled_width, scaled_height);
 
     checkCudaErrors(cudaDeviceSynchronize());
     StopWatchInterface *timer = NULL;
@@ -217,7 +210,7 @@ void runTest(int argc, char **argv)
     sdkStartTimer(&timer);
 
     // Execute the kernel
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, angle);
+    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height, scaled_width, scaled_height);
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
@@ -230,18 +223,18 @@ void runTest(int argc, char **argv)
     sdkDeleteTimer(&timer);
 
     // Allocate mem for the result on host side
-    float *hOutputData = (float *) malloc(scale*scale*size);
+    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size);
     // copy result from device to host
     checkCudaErrors(cudaMemcpy(hOutputData,
                                dData,
-                               scale*scale*size,
+                               scaled_width_size * scaled_height_size,
                                cudaMemcpyDeviceToHost));
 
     // Write result to file
     char outputFilename[1024];
     strcpy(outputFilename, imagePath);
     strcpy(outputFilename + strlen(imagePath) - 4, "_out.pgm");
-    sdkSavePGM(outputFilename, hOutputData, scale*width, scale*height);
+    sdkSavePGM(outputFilename, hOutputData, scaled_width, scaled_height);
     printf("Wrote '%s'\n", outputFilename);
 
 //    // Write regression file if necessary
