@@ -71,75 +71,33 @@ bool testResult = true;
 //! Transform an image using texture lookups
 //! @param outputData  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-/*__global__ void transformKernel(float *outputData,
-                                int width,
-                                int height
-                                )
-{
-	int scaled_width = SCALED_WIDTH;
-	int scaled_height = SCALED_HEIGHT;
-
-    // calculate normalized texture coordinates
-    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
-    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-
-	outputData[y * scaled_width + x] = tex2D(tex,
-					(float) x / scaled_width, (float) y / scaled_height);
-
-    // read from texture and write to global memory
-//	for (int i = x; i < scaled_width; i += gridDim.x * blockDim.x) {
-//		for (int j = y; j < scaled_height; j += gridDim.y * blockDim.y) {
-//			outputData[j * scaled_width + i] = tex2D(tex,
-//					(float) i / scaled_width, (float) j / scaled_height);
-//		}
-//	}
-}*/
-
-/*__global__ void transformKernel(float *outputData,
-                                int width,
-                                int height
-                                )
-{
-	int scaled_width = SCALED_WIDTH;
-	int scaled_height = SCALED_HEIGHT;
-	float upper = 0.53;
-	float lower = 0.48;
-
-    // calculate normalized texture coordinates
-    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
-    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-
-    outputData[y * scaled_width + x] = tex2D(tex,
-    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
-
-}*/
 
 //__global__ void transformKernel(float *outputData,
 //                                int width,
 //                                int height
 //                                )
 //{
-//	int scaled_width = SCALED_WIDTH;
-//	int scaled_height = SCALED_HEIGHT;
-//	float upper = (d_scale_factors[0] + 1) * 0.5;
-//	float lower = (1 - d_scale_factors[0]) * 0.5;
+//	int scaled_width = blockDim.x * gridDim.x;
+//	int scaled_height = blockDim.y * gridDim.y;
+//	float upper;
+//	float lower;
 //
 //    // calculate normalized texture coordinates
 //    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
 //    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 //
-//    outputData[y * scaled_width + x] = tex2D(tex,
-//    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
-//
+//    for (int i=0 ; i<d_scales; i++) {
+//    	upper = (d_scale_factors[i] + 1) * 0.5;
+//    	lower = (1 - d_scale_factors[i]) * 0.5;
+//        outputData[y * scaled_width + x + i*scaled_width*scaled_height] = tex2D(tex,
+//        					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+//	}
 //}
 
-__global__ void transformKernel(float *outputData,
-                                int width,
-                                int height
-                                )
+__global__ void transformKernel(float *outputData, int i)
 {
-	int scaled_width = SCALED_WIDTH;  //blockDim.x * gridDim.x
-	int scaled_height = SCALED_HEIGHT;
+	int scaled_width = blockDim.x * gridDim.x;
+	int scaled_height = blockDim.y * gridDim.y;
 	float upper;
 	float lower;
 
@@ -147,14 +105,12 @@ __global__ void transformKernel(float *outputData,
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 
-    for (int i=0 ; i<d_scales; i++) {
-    	upper = (d_scale_factors[i] + 1) * 0.5;
-    	lower = (1 - d_scale_factors[i]) * 0.5;
-        outputData[y * scaled_width + x + i*scaled_width*scaled_height] = tex2D(tex,
-        					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
-	}
-
+	upper = (d_scale_factors[i] + 1) * 0.5;
+	lower = (1 - d_scale_factors[i]) * 0.5;
+	outputData[y * scaled_width + x] = tex2D(tex,
+			(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Declaration, forward
@@ -291,8 +247,20 @@ void runTest(int argc, char **argv)
     dim3 dimBlock(8, 8, 1);
     dim3 dimGrid(scaled_width / dimBlock.x, scaled_height / dimBlock.y, 1);
 
+    uint8_t nStreams = scales;
+    int streamSize = scaled_width * scaled_height;
+    cudaStream_t streams[nStreams];
+    for (int i = 0; i < nStreams; ++i) {
+    	cudaStreamCreate(&streams[i]);
+	}
+
+    // Allocate mem for the result on host side
+//    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
+    float *hOutputData;
+    checkCudaErrors(cudaMallocHost((void **)&hOutputData, scaled_width_size * scaled_height_size * scales));
+
     // Warmup
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
+//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
 
     checkCudaErrors(cudaDeviceSynchronize());
     StopWatchInterface *timer = NULL;
@@ -300,7 +268,20 @@ void runTest(int argc, char **argv)
     sdkStartTimer(&timer);
 
     // Execute the kernel
-    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
+//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
+//
+//    // copy result from device to host
+//    checkCudaErrors(cudaMemcpy(hOutputData,
+//                               dData,
+//                               scaled_width_size * scaled_height_size * scales,
+//                               cudaMemcpyDeviceToHost));
+
+    for (int i = 0; i < nStreams; ++i) {
+		int offset = i * streamSize;
+		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset], i);
+		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
+				cudaMemcpyDeviceToHost, streams[i]));
+	}
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
@@ -312,17 +293,6 @@ void runTest(int argc, char **argv)
            (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
     sdkDeleteTimer(&timer);
 
-    // Allocate mem for the result on host side
-    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
-
-    for (int i=0;i<scaled_width*scaled_height*scales;i++) {
-    	hOutputData[i] = 0.f;
-    }
-    // copy result from device to host
-    checkCudaErrors(cudaMemcpy(hOutputData,
-                               dData,
-                               scaled_width_size * scaled_height_size * scales,
-                               cudaMemcpyDeviceToHost));
 
 //    // Write result to file
 //    char outputFilename[1024];
@@ -372,6 +342,7 @@ void runTest(int argc, char **argv)
 
     checkCudaErrors(cudaFree(dData));
     checkCudaErrors(cudaFreeArray(cuArray));
+    checkCudaErrors(cudaFreeHost(hOutputData));
     free(imagePath);
     free(refPath);
 }
