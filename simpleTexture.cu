@@ -114,24 +114,48 @@ bool testResult = true;
 
 }*/
 
+//__global__ void transformKernel(float *outputData,
+//                                int width,
+//                                int height
+//                                )
+//{
+//	int scaled_width = SCALED_WIDTH;
+//	int scaled_height = SCALED_HEIGHT;
+//	float upper = (d_scale_factors[0] + 1) * 0.5;
+//	float lower = (1 - d_scale_factors[0]) * 0.5;
+//
+//    // calculate normalized texture coordinates
+//    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+//    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+//
+//    outputData[y * scaled_width + x] = tex2D(tex,
+//    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+//
+//}
+
 __global__ void transformKernel(float *outputData,
                                 int width,
                                 int height
                                 )
 {
-	int scaled_width = SCALED_WIDTH;
+	int scaled_width = SCALED_WIDTH;  //blockDim.x * gridDim.x
 	int scaled_height = SCALED_HEIGHT;
-	float upper = (d_scale_factors[0] + 1) * 0.5;
-	float lower = (1 - d_scale_factors[0]) * 0.5;
+	float upper;
+	float lower;
 
     // calculate normalized texture coordinates
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 
-    outputData[y * scaled_width + x] = tex2D(tex,
-    					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+    for (int i=0 ; i<d_scales; i++) {
+    	upper = (d_scale_factors[i] + 1) * 0.5;
+    	lower = (1 - d_scale_factors[i]) * 0.5;
+        outputData[y * scaled_width + x + i*scaled_width*scaled_height] = tex2D(tex,
+        					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
+	}
 
 }
+
 ////////////////////////////////////////////////////////////////////////////////
 // Declaration, forward
 void runTest(int argc, char **argv);
@@ -238,7 +262,7 @@ void runTest(int argc, char **argv)
 
     // Allocate device memory for result
     float *dData = NULL;
-    checkCudaErrors(cudaMalloc((void **) &dData, scaled_width_size * scaled_height_size));
+    checkCudaErrors(cudaMalloc((void **) &dData, scaled_width_size * scaled_height_size * scales));
 
     // Allocate array and copy image data
     cudaChannelFormatDesc channelDesc =
@@ -289,19 +313,35 @@ void runTest(int argc, char **argv)
     sdkDeleteTimer(&timer);
 
     // Allocate mem for the result on host side
-    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size);
+    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
+
+    for (int i=0;i<scaled_width*scaled_height*scales;i++) {
+    	hOutputData[i] = 0.f;
+    }
     // copy result from device to host
     checkCudaErrors(cudaMemcpy(hOutputData,
                                dData,
-                               scaled_width_size * scaled_height_size,
+                               scaled_width_size * scaled_height_size * scales,
                                cudaMemcpyDeviceToHost));
+
+//    // Write result to file
+//    char outputFilename[1024];
+//    strcpy(outputFilename, imagePath);
+//    strcpy(outputFilename + strlen(imagePath) - 4, "_out.pgm");
+//    sdkSavePGM(outputFilename, hOutputData, scaled_width, scaled_height);
+//    printf("Wrote '%s'\n", outputFilename);
 
     // Write result to file
     char outputFilename[1024];
+    char suffix[10];
     strcpy(outputFilename, imagePath);
-    strcpy(outputFilename + strlen(imagePath) - 4, "_out.pgm");
-    sdkSavePGM(outputFilename, hOutputData, scaled_width, scaled_height);
-    printf("Wrote '%s'\n", outputFilename);
+	for (int i = 0; i < scales; ++i) {
+		sprintf(suffix, "%d", i);
+		strcpy(outputFilename + strlen(imagePath) - 4, suffix);
+		strcat(outputFilename + strlen(outputFilename) - 1, "_out.pgm");
+		sdkSavePGM(outputFilename, hOutputData + scaled_width * scaled_height * i, scaled_width, scaled_height);
+//		printf("Wrote '%s'\n", outputFilename);
+	}
 
 //    // Write regression file if necessary
 //    if (checkCmdLineFlag(argc, (const char **) argv, "regression"))
