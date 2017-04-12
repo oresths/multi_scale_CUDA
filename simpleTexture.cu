@@ -1,3 +1,5 @@
+/* This software contains source code provided by NVIDIA Corporation.
+ * You can find the copyright notice below*/
 /*
  * Copyright 1993-2015 NVIDIA Corporation.  All rights reserved.
  *
@@ -9,13 +11,6 @@
  *
  */
 
-/*
- * This sample demonstrates how use texture fetches in CUDA
- *
- * This sample takes an input PGM image (image_filename) and generates
- * an output PGM image (image_filename_out).  This CUDA kernel performs
- * a simple 2D transform (rotation) on the texture coordinates (u,v).
- */
 
 // Includes, system
 #include <stdlib.h>
@@ -68,7 +63,7 @@ texture<float, 2, cudaReadModeElementType> tex;
 bool testResult = true;
 
 ////////////////////////////////////////////////////////////////////////////////
-//! Transform an image using texture lookups
+//! Resize an image using texture lookups
 //! @param outputData  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -82,11 +77,11 @@ bool testResult = true;
 //	float upper;
 //	float lower;
 //
-//    // calculate normalized texture coordinates
 //    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
 //    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
 //
 //    for (int i=0 ; i<d_scales; i++) {
+//    // calculate normalized texture coordinates
 //    	upper = (d_scale_factors[i] + 1) * 0.5;
 //    	lower = (1 - d_scale_factors[i]) * 0.5;
 //        outputData[y * scaled_width + x + i*scaled_width*scaled_height] = tex2D(tex,
@@ -96,17 +91,17 @@ bool testResult = true;
 
 __global__ void transformKernel(float *outputData, int i)
 {
+    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
+    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
+
+    // calculate normalized texture coordinates TODO pre-compute (LUT ?)
 	int scaled_width = blockDim.x * gridDim.x;
 	int scaled_height = blockDim.y * gridDim.y;
 	float upper;
 	float lower;
-
-    // calculate normalized texture coordinates
-    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
-    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-
 	upper = (d_scale_factors[i] + 1) * 0.5;
 	lower = (1 - d_scale_factors[i]) * 0.5;
+
 	outputData[y * scaled_width + x] = tex2D(tex,
 			(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
 }
@@ -293,13 +288,6 @@ void runTest(int argc, char **argv)
            (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
     sdkDeleteTimer(&timer);
 
-
-//    // Write result to file
-//    char outputFilename[1024];
-//    strcpy(outputFilename, imagePath);
-//    strcpy(outputFilename + strlen(imagePath) - 4, "_out.pgm");
-//    sdkSavePGM(outputFilename, hOutputData, scaled_width, scaled_height);
-//    printf("Wrote '%s'\n", outputFilename);
 
     // Write result to file
     char outputFilename[1024];
