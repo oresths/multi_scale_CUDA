@@ -26,6 +26,9 @@
 
 #include <opencv2/imgproc/imgproc_c.h>
 
+#include "get_cells.h"
+#include "get_features.h"
+
 // Includes CUDA
 #include <cuda_runtime.h>
 
@@ -300,6 +303,62 @@ void runTest(int argc, char **argv)
 		sdkSavePGM(outputFilename, hOutputData + scaled_width * scaled_height * i, scaled_width, scaled_height);
 //		printf("Wrote '%s'\n", outputFilename);
 	}
+
+	int blocks[2];
+	int res_dimy = 512;
+	int res_dimx = 512;
+	blocks[0] = (int)round((float)res_dimy/8.0);
+	blocks[1] = (int)round((float)res_dimx/8.0);
+
+	int hy = max(blocks[0]-2, 0);
+	int hx = max(blocks[1]-2, 0);
+	int hz = 31;
+
+	int sbin = 8;
+
+	int eleSize = hx*hy*hz;
+
+#define MAX_ALLOC 300
+#define MAX_BINS 18
+#define MAX_DIMS 32
+
+    float* d_pHist;
+    float* d_pNorm;
+    float* d_pOut;
+    float* h_pDescriptor;
+
+    h_pDescriptor = (float*)malloc(sizeof(float) * hx*hy*hz);
+
+    cudaMalloc((void**)&d_pHist, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
+	cudaMemset(d_pHist, 0, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
+
+	// blocks outputs
+	//const int nBlocks = MAX_IMAGE_DIMENSION/8 * MAX_IMAGE_DIMENSION/8 ;	// WE ASSUME MAXIMUM IMAGE SIZE OF 1280x1280
+	//const int blocksMemorySize = nBlocks * HOG_BLOCK_CELLS_X * HOG_BLOCK_CELLS_Y * NBINS * sizeof(float);
+	cudaMalloc((void**)&d_pNorm, MAX_ALLOC * MAX_ALLOC * sizeof(float));
+    cudaMemset(d_pNorm, 0, MAX_ALLOC * MAX_ALLOC * sizeof(float));
+
+    cudaMalloc((void**)&d_pOut, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
+	cudaMemset(d_pOut, 0, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
+
+    if( voc_prepare_image2(h_pImg, width, height, sbin) ) {
+		printf("prepare_image failed\n");
+	}
+
+	int res = voc_compute_gradients(width, height, sbin, blocks[0], blocks[1], d_pHist);
+	if( res ) printf("compute_gradients failed: %d\n", res);
+
+	res = voc_compute_block_energy(blocks[0], blocks[1], d_pHist, d_pNorm);
+    if( res ) printf("compute_block_energy failed: %d\n", res);
+
+    voc_compute_features(blocks[0], blocks[1], d_pHist, d_pNorm, d_pOut);
+
+    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
+
+	cudaFree(d_pHist); d_pHist = NULL;
+	cudaFree(d_pNorm); d_pNorm = NULL;
+	cudaFree(d_pOut); d_pOut = NULL;
+    free(h_pDescriptor);
 
 //    // Write regression file if necessary
 //    if (checkCmdLineFlag(argc, (const char **) argv, "regression"))
