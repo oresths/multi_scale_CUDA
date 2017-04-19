@@ -24,7 +24,10 @@
 #  include <windows.h>
 #endif
 
-#include <opencv2/imgproc/imgproc_c.h>
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include "opencv2/imgcodecs/imgcodecs.hpp"
+#include "opencv2/opencv_modules.hpp"
 
 #include "get_cells.h"
 #include "get_features.h"
@@ -60,7 +63,7 @@ __constant__ float d_scale_factors[512];
 __constant__ uint8_t d_scales;
 
 // Texture reference for 2D float texture
-texture<float, 2, cudaReadModeElementType> tex;
+texture<float4, 2, cudaReadModeElementType> tex;
 
 // Auto-Verification Code
 bool testResult = true;
@@ -92,7 +95,7 @@ bool testResult = true;
 //	}
 //}
 
-__global__ void transformKernel(float *outputData, int i)
+__global__ void transformKernel(float4 *outputData, int i)
 {
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
     unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
@@ -169,21 +172,31 @@ void runTest(int argc, char **argv)
     // load image from disk
     float *hData = NULL;
     unsigned int width, height;
-    char *imagePath = sdkFindFilePath(imageFilename, argv[0]);
 
-    if (imagePath == NULL)
+    cv::Mat img_src;
+    img_src = cv::imread("src/person_and_bike_006.png");
+    if (img_src.data == NULL)
     {
         printf("Unable to source image file: %s\n", imageFilename);
         exit(EXIT_FAILURE);
     }
 
-    sdkLoadPGM(imagePath, &hData, &width, &height);
+    img_src.convertTo(img_src, CV_32F, 1.0/255.0);
+    cv::cvtColor(img_src, img_src, cv::COLOR_BGR2BGRA);
 
-    unsigned int size = width * height * sizeof(float);
-    unsigned int scaled_width = SCALED_WIDTH; //floor(scale * width);
-    unsigned int scaled_height = SCALED_HEIGHT; //floor(scale * height);
-    unsigned int scaled_width_size = scaled_width * sizeof(float);
-    unsigned int scaled_height_size = scaled_height * sizeof(float);
+    if (img_src.isContinuous())
+    	hData = img_src.ptr<float>(0);
+
+    width = img_src.cols;
+    height = img_src.rows;
+
+    printf("Loaded '%s', %d x %d pixels\n", imageFilename, width, height);
+
+    unsigned int size = width * height * sizeof(float4);
+    unsigned int scaled_width = SCALED_WIDTH;
+    unsigned int scaled_height = SCALED_HEIGHT;
+    unsigned int scaled_width_size = scaled_width * sizeof(float4);
+    unsigned int scaled_height_size = scaled_height * sizeof(float4);
 
     float scale_step = 1.02;
     uint8_t scales = SCALES;
@@ -197,30 +210,16 @@ void runTest(int argc, char **argv)
     	scale_factors[i] = scale_factors[i] / scale_factors[scales-1];
     }
 
-    printf("Loaded '%s', %d x %d pixels\n", imageFilename, width, height);
-
-    //Load reference image from image (output)
-    float *hDataRef = (float *) malloc(size);
-    char *refPath = sdkFindFilePath(refFilename, argv[0]);
-
-    if (refPath == NULL)
-    {
-        printf("Unable to find reference image file: %s\n", refFilename);
-        exit(EXIT_FAILURE);
-    }
-
-    sdkLoadPGM(refPath, &hDataRef, &width, &height);
-
     checkCudaErrors(cudaMemcpyToSymbol(d_scale_factors, scale_factors, scales*sizeof(float)));
     checkCudaErrors(cudaMemcpyToSymbol(d_scales, &scales, sizeof(uint8_t)));
 
     // Allocate device memory for result
-    float *dData = NULL;
+    float4 *dData = NULL;
     checkCudaErrors(cudaMalloc((void **) &dData, scaled_width_size * scaled_height_size * scales));
 
     // Allocate array and copy image data
-    cudaChannelFormatDesc channelDesc =
-        cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float4>();
+//        cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
     cudaArray *cuArray;
     checkCudaErrors(cudaMallocArray(&cuArray,
                                     &channelDesc,
@@ -253,8 +252,8 @@ void runTest(int argc, char **argv)
 	}
 
     // Allocate mem for the result on host side
-//    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
-    float *hOutputData;
+    //    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
+    float4 *hOutputData;
     checkCudaErrors(cudaMallocHost((void **)&hOutputData, scaled_width_size * scaled_height_size * scales));
 
     // Warmup
@@ -294,15 +293,20 @@ void runTest(int argc, char **argv)
 
     // Write result to file
     char outputFilename[1024];
-    char suffix[10];
-    strcpy(outputFilename, imagePath);
+	char suffix[10];
+	char imagePath[26] = "data/person_and_bike_.png";
+	strcpy(outputFilename, imagePath);
 	for (int i = 0; i < scales; ++i) {
 		sprintf(suffix, "%d", i);
 		strcpy(outputFilename + strlen(imagePath) - 4, suffix);
 		strcat(outputFilename + strlen(outputFilename) - 1, "_out.pgm");
-		sdkSavePGM(outputFilename, hOutputData + scaled_width * scaled_height * i, scaled_width, scaled_height);
-//		printf("Wrote '%s'\n", outputFilename);
+		cv::Mat out(64,64,CV_32FC4,hOutputData + scaled_width * scaled_height * i);
+	    cv::cvtColor(out, out, cv::COLOR_BGRA2BGR);
+	    out.convertTo(out, CV_8U, 255);
+	    imwrite(outputFilename, out);
+		//		printf("Wrote '%s'\n", outputFilename);
 	}
+
 
 	int blocks[2];
 	int res_dimy = 512;
@@ -390,6 +394,4 @@ void runTest(int argc, char **argv)
     checkCudaErrors(cudaFree(dData));
     checkCudaErrors(cudaFreeArray(cuArray));
     checkCudaErrors(cudaFreeHost(hOutputData));
-    free(imagePath);
-    free(refPath);
 }
