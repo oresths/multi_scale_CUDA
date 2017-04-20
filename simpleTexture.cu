@@ -256,61 +256,9 @@ void runTest(int argc, char **argv)
     float4 *hOutputData;
     checkCudaErrors(cudaMallocHost((void **)&hOutputData, scaled_width_size * scaled_height_size * scales));
 
-    // Warmup
-//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
-
-    checkCudaErrors(cudaDeviceSynchronize());
-    StopWatchInterface *timer = NULL;
-    sdkCreateTimer(&timer);
-    sdkStartTimer(&timer);
-
-    // Execute the kernel
-//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
-//
-//    // copy result from device to host
-//    checkCudaErrors(cudaMemcpy(hOutputData,
-//                               dData,
-//                               scaled_width_size * scaled_height_size * scales,
-//                               cudaMemcpyDeviceToHost));
-
-    for (int i = 0; i < nStreams; ++i) {
-		int offset = i * streamSize;
-		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset], i);
-		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
-				cudaMemcpyDeviceToHost, streams[i]));
-	}
-
-    // Check if kernel execution generated an error
-    getLastCudaError("Kernel execution failed");
-
-    checkCudaErrors(cudaDeviceSynchronize());
-    sdkStopTimer(&timer);
-    printf("Processing time: %f (ms)\n", sdkGetTimerValue(&timer));
-    printf("%.2f Mpixels/sec\n",
-           (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
-    sdkDeleteTimer(&timer);
-
-
-    // Write result to file
-    char outputFilename[1024];
-	char suffix[10];
-	char imagePath[26] = "data/person_and_bike_.png";
-	strcpy(outputFilename, imagePath);
-	for (int i = 0; i < scales; ++i) {
-		sprintf(suffix, "%d", i);
-		strcpy(outputFilename + strlen(imagePath) - 4, suffix);
-		strcat(outputFilename + strlen(outputFilename) - 1, "_out.pgm");
-		cv::Mat out(64,64,CV_32FC4,hOutputData + scaled_width * scaled_height * i);
-	    cv::cvtColor(out, out, cv::COLOR_BGRA2BGR);
-	    out.convertTo(out, CV_8U, 255);
-	    imwrite(outputFilename, out);
-		//		printf("Wrote '%s'\n", outputFilename);
-	}
-
-
 	int blocks[2];
-	int res_dimy = 512;
-	int res_dimx = 512;
+	int res_dimy = scaled_height;
+	int res_dimx = scaled_width;
 	blocks[0] = (int)round((float)res_dimy/8.0);
 	blocks[1] = (int)round((float)res_dimx/8.0);
 
@@ -345,24 +293,75 @@ void runTest(int argc, char **argv)
     cudaMalloc((void**)&d_pOut, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
 	cudaMemset(d_pOut, 0, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
 
-    if( voc_prepare_image2(h_pImg, width, height, sbin) ) {
+    if( prepare_images(scaled_width, scaled_height, sbin) ) {
 		printf("prepare_image failed\n");
 	}
 
-	int res = voc_compute_gradients(width, height, sbin, blocks[0], blocks[1], d_pHist);
-	if( res ) printf("compute_gradients failed: %d\n", res);
+    // Warmup
+//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
 
-	res = voc_compute_block_energy(blocks[0], blocks[1], d_pHist, d_pNorm);
-    if( res ) printf("compute_block_energy failed: %d\n", res);
+    checkCudaErrors(cudaDeviceSynchronize());
+    StopWatchInterface *timer = NULL;
+    sdkCreateTimer(&timer);
+    sdkStartTimer(&timer);
 
-    voc_compute_features(blocks[0], blocks[1], d_pHist, d_pNorm, d_pOut);
+    // Execute the kernel
+//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
+//
+//    // copy result from device to host
+//    checkCudaErrors(cudaMemcpy(hOutputData,
+//                               dData,
+//                               scaled_width_size * scaled_height_size * scales,
+//                               cudaMemcpyDeviceToHost));
 
-    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
+    for (int i = 0; i < nStreams; ++i) {
+		int offset = i * streamSize;
+		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset], i);
+//		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
+//				cudaMemcpyDeviceToHost, streams[i]));
+	}
 
-	cudaFree(d_pHist); d_pHist = NULL;
-	cudaFree(d_pNorm); d_pNorm = NULL;
-	cudaFree(d_pOut); d_pOut = NULL;
-    free(h_pDescriptor);
+	for (int i = 0; i < scales; ++i) {
+		set_image(hOutputData + scaled_width * scaled_height * i);
+
+		int res = voc_compute_gradients(scaled_width, scaled_height, sbin, blocks[0], blocks[1], d_pHist);
+		if( res ) printf("compute_gradients failed: %d\n", res);
+
+		res = voc_compute_block_energy(blocks[0], blocks[1], d_pHist, d_pNorm);
+	    if( res ) printf("compute_block_energy failed: %d\n", res);
+
+	    voc_compute_features(blocks[0], blocks[1], d_pHist, d_pNorm, d_pOut);
+
+	    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
+	}
+
+    // Check if kernel execution generated an error
+    getLastCudaError("Kernel execution failed");
+
+    checkCudaErrors(cudaDeviceSynchronize());
+    sdkStopTimer(&timer);
+    printf("Processing time: %f (ms)\n", sdkGetTimerValue(&timer));
+    printf("%.2f Mpixels/sec\n",
+           (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
+    sdkDeleteTimer(&timer);
+
+
+    // Write result to file
+    char outputFilename[1024];
+	char suffix[10];
+	char imagePath[26] = "data/person_and_bike_.png";
+	strcpy(outputFilename, imagePath);
+	for (int i = 0; i < scales; ++i) {
+		sprintf(suffix, "%d", i);
+		strcpy(outputFilename + strlen(imagePath) - 4, suffix);
+		strcat(outputFilename + strlen(outputFilename) - 1, "_out.pgm");
+
+		cv::Mat out(64, 64, CV_32FC4, hOutputData + scaled_width * scaled_height * i);
+	    cv::cvtColor(out, out, cv::COLOR_BGRA2BGR);
+	    out.convertTo(out, CV_8U, 255);
+	    imwrite(outputFilename, out);
+		//		printf("Wrote '%s'\n", outputFilename);
+	}
 
 //    // Write regression file if necessary
 //    if (checkCmdLineFlag(argc, (const char **) argv, "regression"))
@@ -390,6 +389,12 @@ void runTest(int argc, char **argv)
 //                                 MAX_EPSILON_ERROR,
 //                                 0.15f);
 //    }
+
+	cudaFree(d_pHist); d_pHist = NULL;
+	cudaFree(d_pNorm); d_pNorm = NULL;
+	cudaFree(d_pOut); d_pOut = NULL;
+	destroy_images();
+    free(h_pDescriptor);
 
     checkCudaErrors(cudaFree(dData));
     checkCudaErrors(cudaFreeArray(cuArray));

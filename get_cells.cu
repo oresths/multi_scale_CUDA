@@ -690,6 +690,48 @@ int voc_prepare_image2(const ftype* h_pImg, int width, int height, int sbin)
 
 }
 
+int prepare_images(int width, int height, int sbin)
+{
+	float* h_uu = (float*)malloc(sizeof(float)*9);
+    float* h_vv = (float*)malloc(sizeof(float)*9);
+    h_uu[0] =   1.0000f;
+    h_uu[1] = 	0.9397f;
+    h_uu[2] = 	0.7660f;
+    h_uu[3] = 	0.500f;
+    h_uu[4] = 	0.1736f;
+    h_uu[5] = 	-0.1736f;
+    h_uu[6] = 	-0.5000f;
+    h_uu[7] = 	-0.7660f;
+    h_uu[8] = 	-0.9397f;
+
+    h_vv[0] =   0.0000f;
+    h_vv[1] = 	0.3420f;
+    h_vv[2] = 	0.6428f;
+    h_vv[3] = 	0.8660f;
+    h_vv[4] = 	0.9848f;
+    h_vv[5] = 	0.9848f;
+    h_vv[6] = 	0.8660f;
+    h_vv[7] = 	0.6428f;
+    h_vv[8] = 	0.3420f;
+
+
+    cudaMemcpyToSymbol(uu, h_uu, sizeof(float)*9);
+    cudaMemcpyToSymbol(vv, h_vv, sizeof(float)*9);
+
+    free(h_uu);
+    free(h_vv);
+
+    // rescaled image
+    cudaMalloc((void**)&d_RescaledImage, width * height * sizeof(float4));
+
+    return 0;
+}
+
+void set_image(float4 * im)
+{
+	d_RescaledImage = im;
+}
+
 int voc_prepare_image3(float* h_pImg, int width, int height)
 {
 	printf("In voc_prepare_image3: first pixel = %f, %f, %f, %f\n", *(h_pImg), *(h_pImg+1), *(h_pImg+2), *(h_pImg+3));
@@ -725,6 +767,14 @@ int voc_destroy_image2()
 		cudaFree(d_RescaledImage);
 		d_RescaledImage = 0;
 	}
+	return 0;
+}
+
+int destroy_images()
+{
+	cudaFree(d_RescaledImage);
+	d_RescaledImage = 0;
+
 	return 0;
 }
 
