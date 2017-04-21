@@ -18,6 +18,8 @@ int prepare_images(int width, int height, int chan);
 int destroy_images();
 
 void set_image(float4 * im);
+void debug_set_image(float * im, unsigned int scaled_width, unsigned int scaled_height);
+float* debug_get_image(unsigned int scaled_width, unsigned int scaled_height);
 
 extern __host__ void voc_resize_image(int width, int height, int res_wid, int res_hei, int oct);
 extern __host__ void voc_set_octref(int ref_dimx, int ref_dimy, int oct);

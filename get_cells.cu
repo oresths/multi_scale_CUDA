@@ -721,15 +721,26 @@ int prepare_images(int width, int height, int sbin)
     free(h_uu);
     free(h_vv);
 
-    // rescaled image
-    cudaMalloc((void**)&d_RescaledImage, width * height * sizeof(float4));
-
     return 0;
 }
 
 void set_image(float4 * im)
 {
 	d_RescaledImage = im;
+}
+
+void debug_set_image(float * im, unsigned int scaled_width, unsigned int scaled_height)
+{
+	cudaMalloc((void**)&d_RescaledImage, scaled_width * scaled_height * sizeof(float4));
+	cudaMemcpy(d_RescaledImage, im, sizeof(float4) * scaled_width * scaled_height, cudaMemcpyHostToDevice);
+}
+
+float* debug_get_image(unsigned int scaled_width, unsigned int scaled_height)
+{
+	float *h_RescaledImage = (float *) malloc(scaled_width * scaled_height * sizeof(float) * 4);
+	cudaMemcpy(h_RescaledImage, d_RescaledImage, sizeof(float4) * scaled_width * scaled_height, cudaMemcpyDeviceToHost);
+
+	return h_RescaledImage;
 }
 
 int voc_prepare_image3(float* h_pImg, int width, int height)

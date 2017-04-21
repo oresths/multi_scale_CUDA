@@ -48,6 +48,8 @@
 
 #define SCALES 33
 
+#define DEBUG_MAIN 0
+
 
 // Define the files that are to be save and the reference images for validation
 const char *imageFilename = "lena_bw.pgm";
@@ -184,6 +186,10 @@ void runTest(int argc, char **argv)
     img_src.convertTo(img_src, CV_32F, 1.0/255.0);
     cv::cvtColor(img_src, img_src, cv::COLOR_BGR2BGRA);
 
+#if DEBUG_MAIN
+    cv::resize(img_src, img_src, cv::Size2d(SCALED_WIDTH, SCALED_HEIGHT), 0, 0, cv::INTER_LINEAR);
+#endif
+
     if (img_src.isContinuous())
     	hData = img_src.ptr<float>(0);
 
@@ -251,10 +257,12 @@ void runTest(int argc, char **argv)
     	cudaStreamCreate(&streams[i]);
 	}
 
+#if DEBUG_MAIN
     // Allocate mem for the result on host side
     //    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
     float4 *hOutputData;
     checkCudaErrors(cudaMallocHost((void **)&hOutputData, scaled_width_size * scaled_height_size * scales));
+#endif
 
 	int blocks[2];
 	int res_dimy = scaled_height;
@@ -317,12 +325,26 @@ void runTest(int argc, char **argv)
     for (int i = 0; i < nStreams; ++i) {
 		int offset = i * streamSize;
 		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset], i);
-//		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
-//				cudaMemcpyDeviceToHost, streams[i]));
+#if DEBUG_MAIN
+		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
+				cudaMemcpyDeviceToHost, streams[i]));
+#endif
 	}
 
 	for (int i = 0; i < scales; ++i) {
-		set_image(hOutputData + scaled_width * scaled_height * i);
+		set_image(dData + scaled_width * scaled_height * i);
+
+#if DEBUG_MAIN
+		debug_set_image(hData, scaled_width, scaled_height);
+
+		cv::Mat out1(64, 64, CV_32FC4, debug_get_image(scaled_width, scaled_height));
+	    cv::cvtColor(out1, out1, cv::COLOR_BGRA2BGR);
+	    out1.convertTo(out1, CV_8U, 255);
+	    imwrite("test.png", out1);
+#endif
+
+		cudaMemset(d_pHist, 0, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
+	    cudaMemset(d_pNorm, 0, MAX_ALLOC * MAX_ALLOC * sizeof(float));
 
 		int res = voc_compute_gradients(scaled_width, scaled_height, sbin, blocks[0], blocks[1], d_pHist);
 		if( res ) printf("compute_gradients failed: %d\n", res);
@@ -338,14 +360,14 @@ void runTest(int argc, char **argv)
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
 
-    checkCudaErrors(cudaDeviceSynchronize());
+//    checkCudaErrors(cudaDeviceSynchronize());
     sdkStopTimer(&timer);
     printf("Processing time: %f (ms)\n", sdkGetTimerValue(&timer));
     printf("%.2f Mpixels/sec\n",
            (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
     sdkDeleteTimer(&timer);
 
-
+#if DEBUG_MAIN
     // Write result to file
     char outputFilename[1024];
 	char suffix[10];
@@ -354,7 +376,7 @@ void runTest(int argc, char **argv)
 	for (int i = 0; i < scales; ++i) {
 		sprintf(suffix, "%d", i);
 		strcpy(outputFilename + strlen(imagePath) - 4, suffix);
-		strcat(outputFilename + strlen(outputFilename) - 1, "_out.pgm");
+		strcat(outputFilename + strlen(outputFilename) - 1, "_out.png");
 
 		cv::Mat out(64, 64, CV_32FC4, hOutputData + scaled_width * scaled_height * i);
 	    cv::cvtColor(out, out, cv::COLOR_BGRA2BGR);
@@ -362,6 +384,7 @@ void runTest(int argc, char **argv)
 	    imwrite(outputFilename, out);
 		//		printf("Wrote '%s'\n", outputFilename);
 	}
+#endif
 
 //    // Write regression file if necessary
 //    if (checkCmdLineFlag(argc, (const char **) argv, "regression"))
@@ -393,10 +416,14 @@ void runTest(int argc, char **argv)
 	cudaFree(d_pHist); d_pHist = NULL;
 	cudaFree(d_pNorm); d_pNorm = NULL;
 	cudaFree(d_pOut); d_pOut = NULL;
-	destroy_images();
+
     free(h_pDescriptor);
 
     checkCudaErrors(cudaFree(dData));
     checkCudaErrors(cudaFreeArray(cuArray));
+
+#if DEBUG_MAIN
+	destroy_images();
     checkCudaErrors(cudaFreeHost(hOutputData));
+#endif
 }
