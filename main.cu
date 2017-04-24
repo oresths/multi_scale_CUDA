@@ -278,7 +278,7 @@ void runTest(int argc, char **argv)
 
 	int eleSize = hx*hy*hz;
 
-#define MAX_ALLOC 300
+#define MAX_ALLOC 8
 #define MAX_BINS 18
 #define MAX_DIMS 32
 
@@ -355,6 +355,8 @@ void runTest(int argc, char **argv)
 	    voc_compute_features(blocks[0], blocks[1], d_pHist, d_pNorm, d_pOut);
 
 	    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
+
+	    printf("d = %f \n",h_pDescriptor[0]);
 	}
 
     // Check if kernel execution generated an error

@@ -1,6 +1,4 @@
-This code extracts different sized image patches around a target and resizes to a standard window in order to extract features. 
-
-Features will probably be histogram of gradients
+This code extracts different sized image patches around a target and resizes to a standard window and then extracts fHOG compatible features. 
 
 
 To cite:

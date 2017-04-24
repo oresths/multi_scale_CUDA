@@ -287,6 +287,11 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
     const int posx	= blockDim.x * blockIdx.x + threadIdx.x + min_x;// pixel pos within padded image
 	const int posy	= blockDim.y * blockIdx.y + threadIdx.y + min_y;// pixel pos within padded image
 
+//	if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 1)
+//	{
+//		printf("tidx= %d, tidy= %d\n", posx, posy);
+//	}
+
 	//__trace("Test", "int", posx);
 	//__trace("Test", "int", posy);
 
@@ -426,7 +431,7 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
     	    dy = dy3;
         }
 
-        v = sqrtf(v);
+        v = sqrtf(v); // TODO needed ?
 
 		//__trace("v", "float", v);
 
@@ -461,13 +466,23 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 		ftype vx1 = 1.0f-vx0;
 		ftype vy1 = 1.0f-vy0;
 
-		//__trace("iyp", "int", iyp);
-		//__trace("ixp", "int", ixp);
+//		if (threadIdx.x==8 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1)
+//		{
+//			printf("posx= %d, xp= %f, ixp= %d, posy= %d, yp= %f, iyp= %d\n", posx, xp, ixp, posy, yp, iyp);
+//			printf("vx0= %f, vy0= %f, vx1= %f, vy1= %f\n", vx0, vy0, vx1, vy1);
+//		}
+//		if (threadIdx.x==0 && threadIdx.y == 0 )
+//		{
+//			printf("tidx= %d, xp= %f, ixp= %d\n", posx, xp, ixp);
+//		}
 
-        ftype cxp = ((ftype)(threadIdx.x)+0.5f)/(ftype)sbin - 0.5f;
-        ftype cyp = ((ftype)(threadIdx.y)+0.5f)/(ftype)sbin - 0.5f;
-        int icxp = (int)floor(cxp) + 1;
-		int icyp = (int)floor(cyp) + 1;
+//		__trace("iyp", "int", iyp);
+//		__trace("ixp", "int", ixp);
+
+//        ftype cxp = ((ftype)(threadIdx.x)+0.5f)/(ftype)sbin - 0.5f;
+//        ftype cyp = ((ftype)(threadIdx.y)+0.5f)/(ftype)sbin - 0.5f;
+//        int icxp = (int)floor(cxp) + 1;
+//		int icyp = (int)floor(cyp) + 1;
         
         // TODO: cache these operations into shared memory
         if (ixp >= 0 && iyp >= 0) {
@@ -476,6 +491,12 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
             //atomicAdd(s_Cells+ icxp*3 + icyp + best_o*3*3, vx1*vy1*v);
 			//__trace("1", "float", vx1*vy1*v);
 			//__syncthreads();
+//			if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1) {
+//				printf("addr1= %d\n", ixp*block_0 + iyp + best_o*block_0*block_1);
+//			}
+//			if (ixp==2 && iyp==1) {
+//				printf("11111111111111111111111111111111111111111111111111111111\n");
+//			}
         }
 		
         if (ixp+1 < block_1 && iyp >= 0) {
@@ -484,6 +505,9 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
             //atomicAdd(s_Cells+ (icxp+1)*3 + icyp + best_o*3*3, vx0*vy1*v);
 			//__trace("2", "float", vx0*vy1*v);
 			//__syncthreads();
+//			if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1) {
+//				printf("addr2= %d\n", (ixp+1)*block_0 + iyp + best_o*block_0*block_1);
+//			}
         }
 
         if (ixp >= 0 && iyp+1 < block_0) {
@@ -492,6 +516,9 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
             //atomicAdd(s_Cells+ icxp*3 + (icyp+1) + best_o*3*3, vx1*vy0*v);
 			//__trace("3", "float", vx1*vy0*v);
 			//__syncthreads();
+//			if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1) {
+//				printf("addr3= %d\n", ixp*block_0 + (iyp+1) + best_o*block_0*block_1);
+//			}
         }
 
         if (ixp+1 < block_1 && iyp+1 < block_0) {
@@ -501,6 +528,9 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 			//__trace("4", "float", *(d_pHist + (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1));
 			//__trace("4", "float", vx0*vy0*v);
 			//__syncthreads();
+//			if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1) {
+//				printf("addr4= %d\n", (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1);
+//			}
         }
 		/*
         __syncthreads();
