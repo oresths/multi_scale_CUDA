@@ -55,7 +55,7 @@
 const char *imageFilename = "lena_bw.pgm";
 const char *refFilename   = "ref_rotated.pgm";
 
-const char *sampleName = "simpleTexture";
+const char *sampleName = "fHOG";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constants
@@ -356,7 +356,7 @@ void runTest(int argc, char **argv)
 
 	    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
 
-	    printf("d = %f \n",h_pDescriptor[0]);
+//	    printf("d = %f \n",h_pDescriptor[0]);
 	}
 
     // Check if kernel execution generated an error

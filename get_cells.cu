@@ -284,8 +284,29 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 {
     //__shared__ float s_Cells[(2+1) * (2+1) * 18];
 
+
+#define R 2
+#define BLOCK0 8
+#define BLOCK1 8
+#define BINS 18
+#define MAX_BINS BINS
+
+	__shared__ float Hs[BLOCK0 * BLOCK1 * MAX_BINS * R]; //TODO Limit memory to only the cells used by the block
+
     const int posx	= blockDim.x * blockIdx.x + threadIdx.x + min_x;// pixel pos within padded image
 	const int posy	= blockDim.y * blockIdx.y + threadIdx.y + min_y;// pixel pos within padded image
+
+//	const int bx = blockIdx.x;
+	const int tx = threadIdx.x;
+//	const int by = blockIdx.y;
+	const int ty = threadIdx.y;
+
+	// Sub-histogram initialization
+	for (int py = ty; py < BINS * block_0 * block_1; py += blockDim.y) {
+		for(int px = tx; px < R; px += blockDim.x) Hs[py * R + px]=0;
+	}
+
+	__syncthreads(); // Intra-block synchronization
 
 //	if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 1)
 //	{
@@ -466,7 +487,7 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 		ftype vx1 = 1.0f-vx0;
 		ftype vy1 = 1.0f-vy0;
 
-//		if (threadIdx.x==8 && threadIdx.y == 0 && blockIdx.x == 1 && blockIdx.y == 1)
+//		if (threadIdx.x==0 && (threadIdx.y == 2 || threadIdx.y == 10 || threadIdx.y == 4) && blockIdx.x == 2 && blockIdx.y == 0)
 //		{
 //			printf("posx= %d, xp= %f, ixp= %d, posy= %d, yp= %f, iyp= %d\n", posx, xp, ixp, posy, yp, iyp);
 //			printf("vx0= %f, vy0= %f, vx1= %f, vy1= %f\n", vx0, vy0, vx1, vy1);
@@ -483,11 +504,15 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 //        ftype cyp = ((ftype)(threadIdx.y)+0.5f)/(ftype)sbin - 0.5f;
 //        int icxp = (int)floor(cxp) + 1;
 //		int icyp = (int)floor(cyp) + 1;
-        
+
+		unsigned int X = (tx + ty*blockDim.x ) % R;
+		unsigned int Y;
+
         // TODO: cache these operations into shared memory
         if (ixp >= 0 && iyp >= 0) {
 	        //*(d_pHist+ ixp*block_0 + iyp + best_o*block_0*block_1) += vx1*vy1*v;
-			atomicAdd(d_pHist+ ixp*block_0 + iyp + best_o*block_0*block_1, vx1*vy1*v);
+        	Y = ixp*block_0 + iyp + best_o*block_0*block_1;
+        	atomicAdd(&Hs[Y*R + X], vx1*vy1*v);
             //atomicAdd(s_Cells+ icxp*3 + icyp + best_o*3*3, vx1*vy1*v);
 			//__trace("1", "float", vx1*vy1*v);
 			//__syncthreads();
@@ -501,7 +526,11 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 		
         if (ixp+1 < block_1 && iyp >= 0) {
 	        //*(d_pHist + (ixp+1)*block_0 + iyp + best_o*block_0*block_1) += vx0*vy1*v;
-			atomicAdd(d_pHist + (ixp+1)*block_0 + iyp + best_o*block_0*block_1, vx0*vy1*v);
+        	Y = (ixp+1)*block_0 + iyp + best_o*block_0*block_1;
+//        	printf("tx=%d ty=%d \n", tx, ty);
+//        	if (!((threadIdx.x==12 || threadIdx.x==15) && (threadIdx.y == 5 || threadIdx.y == 11) && blockIdx.x == 2 && blockIdx.y == 0))
+//        		if (!( threadIdx.y == 4 && blockIdx.x == 2 && blockIdx.y == 0))
+        	atomicAdd(&Hs[Y*R + X], vx0*vy1*v);
             //atomicAdd(s_Cells+ (icxp+1)*3 + icyp + best_o*3*3, vx0*vy1*v);
 			//__trace("2", "float", vx0*vy1*v);
 			//__syncthreads();
@@ -512,7 +541,8 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 
         if (ixp >= 0 && iyp+1 < block_0) {
 	        //*(d_pHist + ixp*block_0 + (iyp+1) + best_o*block_0*block_1) += vx1*vy0*v;
-			atomicAdd(d_pHist + ixp*block_0 + (iyp+1) + best_o*block_0*block_1, vx1*vy0*v);
+        	Y = ixp*block_0 + (iyp+1) + best_o*block_0*block_1;
+        	atomicAdd(&Hs[Y*R + X], vx1*vy0*v);
             //atomicAdd(s_Cells+ icxp*3 + (icyp+1) + best_o*3*3, vx1*vy0*v);
 			//__trace("3", "float", vx1*vy0*v);
 			//__syncthreads();
@@ -523,7 +553,13 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 
         if (ixp+1 < block_1 && iyp+1 < block_0) {
 	        //*(d_pHist + (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1) += vx0*vy0*v;
-			atomicAdd(d_pHist + (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1, vx0*vy0*v);
+        	Y = (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1;
+//        	printf("tx=%d ty=%d \n", tx, ty);
+//        	if (best_o >= 0 && best_o < 18)
+//        	if (!((threadIdx.x==0 || threadIdx.x==1 || threadIdx.x==2 || threadIdx.x==3) && threadIdx.y == 2 && blockIdx.x == 2 && blockIdx.y == 0))
+//        	if (!((threadIdx.x == 12 || threadIdx.x==15) && (threadIdx.y == 11 || threadIdx.y == 2 || threadIdx.y == 5) && blockIdx.x == 2 && blockIdx.y == 0))
+
+			atomicAdd(&Hs[Y*R + X], vx0*vy0*v);
             //atomicAdd(s_Cells+ (icxp+1)*3 + (icyp+1) + best_o*3*3, vx0*vy0*v);
 			//__trace("4", "float", *(d_pHist + (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1));
 			//__trace("4", "float", vx0*vy0*v);
@@ -532,6 +568,9 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 //				printf("addr4= %d\n", (ixp+1)*block_0 + (iyp+1) + best_o*block_0*block_1);
 //			}
         }
+
+		__syncthreads(); // Intra-block synchronization
+
 		/*
         __syncthreads();
         
