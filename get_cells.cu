@@ -21,6 +21,9 @@ __device__ __constant__ float vv[9];
 float* d_uu;
 float* d_vv;
 
+__constant__ float d_scale_factorsf[512];
+texture<float4, 2, cudaReadModeElementType> texf;
+
 float4* d_RescaledImage = 0;
 // It seems a texture can not be bind several times with different cudaArray
 //cudaArray *imageArray;
@@ -279,13 +282,21 @@ __global__ void d_voc_compute_hists(int width, int height,
 __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy, 
                                 int block_0, int block_1, int sbin,
 								int min_x, int min_y, int max_x, int max_y,
-								float4* d_pImage, float* d_pHist)
+								float4* d_pImage, float* d_pHist, int i)
 
 {
     //__shared__ float s_Cells[(2+1) * (2+1) * 18];
 
     const int posx	= blockDim.x * blockIdx.x + threadIdx.x + min_x;// pixel pos within padded image
 	const int posy	= blockDim.y * blockIdx.y + threadIdx.y + min_y;// pixel pos within padded image
+
+	// calculate normalized texture coordinates TODO pre-compute (LUT ?)
+	int scaled_width = dimx;
+	int scaled_height = dimy;
+	float upper;
+	float lower;
+	upper = (d_scale_factorsf[i] + 1) * 0.5;
+	lower = (1 - d_scale_factorsf[i]) * 0.5;
 
 //	if (threadIdx.x==0 && threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 1)
 //	{
@@ -359,7 +370,7 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
         && (posy < max_y) && (posy > 0)) {
 
         //float* pixel_pos = d_pImage + posy * 4 * dimx + 4 * posx;
-        float4* pixel_pos = d_pImage + posy*dimx + posx;
+//        float4* pixel_pos = d_pImage + posy*dimx + posx;
         //float4* pixel_pos = d_pImage + posx*dimy + posy;
         /*
         pixel_left.x = *(pixel_pos - 4);
@@ -383,10 +394,19 @@ __global__ void d_voc_compute_hists2 /*__traceable__*/ (int dimx, int dimy,
 		//__trace("up", "float", pixel_up.x);
 		//__trace("down", "float", pixel_down.x);
           
-        pixel_down = *(pixel_pos + dimx);
-        pixel_up = *(pixel_pos - dimx);
-        pixel_left = *(pixel_pos - 1);
-        pixel_right = *(pixel_pos + 1);
+//        pixel_down = *(pixel_pos + dimx);
+//        pixel_up = *(pixel_pos - dimx);
+//        pixel_left = *(pixel_pos - 1);
+//        pixel_right = *(pixel_pos + 1);
+
+        pixel_down = tex2D(texf,
+        		(float) posx * (upper-lower) / scaled_width +lower, (float) (posy + 1) * (upper-lower) / scaled_height +lower);
+        pixel_up = tex2D(texf,
+    			(float) posx * (upper-lower) / scaled_width +lower, (float) (posy - 1) * (upper-lower) / scaled_height +lower);
+        pixel_left = tex2D(texf,
+    			(float) (posx - 1) * (upper-lower) / scaled_width +lower, (float) posy * (upper-lower) / scaled_height +lower);
+        pixel_right = tex2D(texf,
+    			(float) (posx + 1) * (upper-lower) / scaled_width +lower, (float) posy * (upper-lower) / scaled_height +lower);
 		
 
         ftype dy, dy2, dy3, dx, dx2, dx3, v, v2, v3;
@@ -720,7 +740,7 @@ int voc_prepare_image2(const ftype* h_pImg, int width, int height, int sbin)
 
 }
 
-int prepare_images(int width, int height, int sbin)
+int prepare_images(int width, int height, int sbin, cudaArray *cuArray, float * scale_factors)
 {
 	float* h_uu = (float*)malloc(sizeof(float)*9);
     float* h_vv = (float*)malloc(sizeof(float)*9);
@@ -750,6 +770,20 @@ int prepare_images(int width, int height, int sbin)
 
     free(h_uu);
     free(h_vv);
+
+    cudaMemcpyToSymbol(d_scale_factorsf, scale_factors, 33*sizeof(float)); //TODO scales
+
+    // Allocate array and copy image data
+    cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<float4>();
+
+    // Set texture parameters
+    texf.addressMode[0] = cudaAddressModeClamp;
+    texf.addressMode[1] = cudaAddressModeClamp;
+    texf.filterMode = cudaFilterModeLinear;
+    texf.normalized = true;    // access with normalized texture coordinates
+
+    // Bind the array to the texture
+    cudaBindTextureToArray(texf, cuArray, channelDesc);
 
     return 0;
 }
@@ -925,7 +959,7 @@ __host__ void voc_set_octref(int ref_dimx, int ref_dimy, int oct)
 }
 
 __host__ int voc_compute_gradients( int width, int height, int sbin,
-                                int blocks_0, int blocks_1, float* d_pHist)
+                                int blocks_0, int blocks_1, float* d_pHist, int i, cudaStream_t streams)
 {
 	// start kernel to compute gradient directions & magnitudes
 	const int TX = 16;
@@ -996,11 +1030,11 @@ __host__ int voc_compute_gradients( int width, int height, int sbin,
 	startTimer(&tt);
 #endif
     
-	d_voc_compute_hists2<<< grid , threads >>> /*__traceable_call__*/ (width, height,
+	d_voc_compute_hists2<<< grid , threads, 0, streams >>> /*__traceable_call__*/ (width, height,
 	                                            blocks_0,blocks_1, sbin,
 												x_lbound, y_lbound, 
 												x_ubound, y_ubound, 
-												/*d_pImage*/d_RescaledImage, d_pHist);
+												/*d_pImage*/d_RescaledImage, d_pHist, i);
 		ONFAIL("d_voc_compute_hists failed\n");
 
 #ifdef DEBUG_TIME_EACH_STEP

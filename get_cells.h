@@ -7,14 +7,14 @@
 int voc_prepare_image(const float* h_pImg, int width, int height);                                      
 
 extern __host__ int voc_compute_gradients( int width, int height, int sbin,
-                                int blocks_0, int blocks_1, float* d_pHist);
+                                int blocks_0, int blocks_1, float* d_pHist, int i, cudaStream_t streams);
 
 int voc_prepare_image2(const float* h_pImg, int width, int height, int chan);
 int voc_destroy_image2();
 int voc_prepare_image3(float* h_pImg, int width, int height);
 int voc_destroy_image3();
 
-int prepare_images(int width, int height, int chan);
+int prepare_images(int width, int height, int chan, cudaArray *cuArray, float * scale_factors);
 int destroy_images();
 
 void set_image(float4 * im);

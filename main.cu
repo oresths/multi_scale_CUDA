@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <unistd.h>
 
 #ifdef _WIN32
 #  define WINDOWS_LEAN_AND_MEAN
@@ -50,12 +51,14 @@
 
 #define DEBUG_MAIN 0
 
+#define DIRECT_READ 0
+
 
 // Define the files that are to be save and the reference images for validation
-const char *imageFilename = "lena_bw.pgm";
+const char *imageFilename = "Image patch";
 const char *refFilename   = "ref_rotated.pgm";
 
-const char *sampleName = "simpleTexture";
+const char *programName = "Feature extraction";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Constants
@@ -74,29 +77,6 @@ bool testResult = true;
 //! Resize an image using texture lookups
 //! @param outputData  output data in global memory
 ////////////////////////////////////////////////////////////////////////////////
-
-//__global__ void transformKernel(float *outputData,
-//                                int width,
-//                                int height
-//                                )
-//{
-//	int scaled_width = blockDim.x * gridDim.x;
-//	int scaled_height = blockDim.y * gridDim.y;
-//	float upper;
-//	float lower;
-//
-//    unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
-//    unsigned int y = blockIdx.y*blockDim.y + threadIdx.y;
-//
-//    for (int i=0 ; i<d_scales; i++) {
-//    // calculate normalized texture coordinates
-//    	upper = (d_scale_factors[i] + 1) * 0.5;
-//    	lower = (1 - d_scale_factors[i]) * 0.5;
-//        outputData[y * scaled_width + x + i*scaled_width*scaled_height] = tex2D(tex,
-//        					(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
-//	}
-//}
-
 __global__ void transformKernel(float4 *outputData, int i)
 {
     unsigned int x = blockIdx.x*blockDim.x + threadIdx.x;
@@ -114,7 +94,6 @@ __global__ void transformKernel(float4 *outputData, int i)
 			(float) x * (upper-lower) / scaled_width +lower, (float) y * (upper-lower) / scaled_height +lower);
 }
 
-
 ////////////////////////////////////////////////////////////////////////////////
 // Declaration, forward
 void runTest(int argc, char **argv);
@@ -124,7 +103,7 @@ void runTest(int argc, char **argv);
 ////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char **argv)
 {
-    printf("%s starting...\n", sampleName);
+    printf("%s starting...\n", programName);
 
     // Process command-line arguments
     if (argc > 1)
@@ -159,7 +138,7 @@ int main(int argc, char **argv)
     runTest(argc, argv);
 
     printf("%s completed, returned %s\n",
-           sampleName,
+           programName,
            testResult ? "OK" : "ERROR!");
     exit(testResult ? EXIT_SUCCESS : EXIT_FAILURE);
 }
@@ -209,11 +188,12 @@ void runTest(int argc, char **argv)
     float scale_factors[scales];
 
     for (int i=0; i<scales ; i++) {
-    	scale_factors[i] = pow(scale_step, i+1);
+    	scale_factors[scales - 1 - i] = pow(scale_step, i+1);
     }
 
+    float temp = scale_factors[0];
     for (int i=0; i<scales ; i++) {
-    	scale_factors[i] = scale_factors[i] / scale_factors[scales-1];
+    	scale_factors[i] = scale_factors[i] / temp;
     }
 
     checkCudaErrors(cudaMemcpyToSymbol(d_scale_factors, scale_factors, scales*sizeof(float)));
@@ -259,7 +239,6 @@ void runTest(int argc, char **argv)
 
 #if DEBUG_MAIN
     // Allocate mem for the result on host side
-    //    float *hOutputData = (float *) malloc(scaled_width_size * scaled_height_size * scales);
     float4 *hOutputData;
     checkCudaErrors(cudaMallocHost((void **)&hOutputData, scaled_width_size * scaled_height_size * scales));
 #endif
@@ -287,21 +266,15 @@ void runTest(int argc, char **argv)
     float* d_pOut;
     float* h_pDescriptor;
 
-    h_pDescriptor = (float*)malloc(sizeof(float) * hx*hy*hz);
+    checkCudaErrors(cudaMallocHost((void **)&h_pDescriptor, sizeof(float) * hx*hy*hz * scales));
 
-    cudaMalloc((void**)&d_pHist, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
-	cudaMemset(d_pHist, 0, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
+    cudaMalloc((void**)&d_pHist, MAX_ALLOC * MAX_ALLOC * MAX_BINS * SCALES * sizeof(float));
 
-	// blocks outputs
-	//const int nBlocks = MAX_IMAGE_DIMENSION/8 * MAX_IMAGE_DIMENSION/8 ;	// WE ASSUME MAXIMUM IMAGE SIZE OF 1280x1280
-	//const int blocksMemorySize = nBlocks * HOG_BLOCK_CELLS_X * HOG_BLOCK_CELLS_Y * NBINS * sizeof(float);
-	cudaMalloc((void**)&d_pNorm, MAX_ALLOC * MAX_ALLOC * sizeof(float));
-    cudaMemset(d_pNorm, 0, MAX_ALLOC * MAX_ALLOC * sizeof(float));
+	cudaMalloc((void**)&d_pNorm, MAX_ALLOC * MAX_ALLOC * SCALES * sizeof(float));
 
-    cudaMalloc((void**)&d_pOut, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
-	cudaMemset(d_pOut, 0, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * sizeof(float));
+    cudaMalloc((void**)&d_pOut, MAX_ALLOC * MAX_ALLOC * MAX_DIMS * SCALES * sizeof(float));
 
-    if( prepare_images(scaled_width, scaled_height, sbin) ) {
+    if( prepare_images(scaled_width, scaled_height, sbin, cuArray, scale_factors) ) {
 		printf("prepare_image failed\n");
 	}
 
@@ -313,28 +286,10 @@ void runTest(int argc, char **argv)
     sdkCreateTimer(&timer);
     sdkStartTimer(&timer);
 
-    // Execute the kernel
-//    transformKernel<<<dimGrid, dimBlock, 0>>>(dData, width, height);
-//
-//    // copy result from device to host
-//    checkCudaErrors(cudaMemcpy(hOutputData,
-//                               dData,
-//                               scaled_width_size * scaled_height_size * scales,
-//                               cudaMemcpyDeviceToHost));
-
-    for (int i = 0; i < nStreams; ++i) {
-		int offset = i * streamSize;
-		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset], i);
-#if DEBUG_MAIN
-		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
-				cudaMemcpyDeviceToHost, streams[i]));
-#endif
-	}
 
 	for (int i = 0; i < scales; ++i) {
-		set_image(dData + scaled_width * scaled_height * i);
 
-#if DEBUG_MAIN
+#if  DEBUG_MAIN
 		debug_set_image(hData, scaled_width, scaled_height);
 
 		cv::Mat out1(64, 64, CV_32FC4, debug_get_image(scaled_width, scaled_height));
@@ -343,31 +298,49 @@ void runTest(int argc, char **argv)
 	    imwrite("test.png", out1);
 #endif
 
-		cudaMemset(d_pHist, 0, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float));
-	    cudaMemset(d_pNorm, 0, MAX_ALLOC * MAX_ALLOC * sizeof(float));
+	    int offset3 = i * MAX_ALLOC * MAX_ALLOC;
+		cudaMemsetAsync(&d_pHist[offset3 * MAX_BINS], 0, MAX_ALLOC * MAX_ALLOC * MAX_BINS * sizeof(float), streams[i]);
+	    cudaMemsetAsync(&d_pNorm[offset3], 0, MAX_ALLOC * MAX_ALLOC * sizeof(float), streams[i]);
 
-		int res = voc_compute_gradients(scaled_width, scaled_height, sbin, blocks[0], blocks[1], d_pHist);
+//		int offset2 = i * streamSize;
+//		transformKernel<<<dimGrid, dimBlock, 0, streams[i]>>>(&dData[offset2], i);
+//#if DEBUG_MAIN
+//		checkCudaErrors(cudaMemcpyAsync(&hOutputData[offset], &dData[offset], scaled_width_size * scaled_height_size,
+//				cudaMemcpyDeviceToHost, streams[i]));
+//#endif
+
+		set_image(dData + scaled_width * scaled_height * i);
+
+		int offset = i * hx*hy*hz;
+
+		int res = voc_compute_gradients(scaled_width, scaled_height, sbin, blocks[0], blocks[1], &d_pHist[offset3 * MAX_BINS], i, streams[i]);
 		if( res ) printf("compute_gradients failed: %d\n", res);
 
-		res = voc_compute_block_energy(blocks[0], blocks[1], d_pHist, d_pNorm);
+		res = voc_compute_block_energy(blocks[0], blocks[1], &d_pHist[offset3 * MAX_BINS], &d_pNorm[offset3], streams[i]);
 	    if( res ) printf("compute_block_energy failed: %d\n", res);
 
-	    voc_compute_features(blocks[0], blocks[1], d_pHist, d_pNorm, d_pOut);
+	    voc_compute_features(blocks[0], blocks[1], &d_pHist[offset3 * MAX_BINS], &d_pNorm[offset3], &d_pOut[offset], streams[i]);
 
-	    cudaMemcpy(h_pDescriptor, d_pOut, sizeof(float) * eleSize, cudaMemcpyDeviceToHost);
-
-	    printf("d = %f \n",h_pDescriptor[0]);
+	    cudaMemcpyAsync(&h_pDescriptor[offset], &d_pOut[offset], sizeof(float) * eleSize, cudaMemcpyDeviceToHost, streams[i]);
 	}
 
     // Check if kernel execution generated an error
     getLastCudaError("Kernel execution failed");
 
-//    checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaDeviceSynchronize());
+
     sdkStopTimer(&timer);
     printf("Processing time: %f (ms)\n", sdkGetTimerValue(&timer));
     printf("%.2f Mpixels/sec\n",
            (width *height / (sdkGetTimerValue(&timer) / 1000.0f)) / 1e6);
     sdkDeleteTimer(&timer);
+
+//    checkCudaErrors(cudaDeviceSynchronize()); //Do something with the cpu before this line
+
+	for (int i = scales-3; i < scales; ++i) {
+		int offset2 = i * hx*hy*hz;
+	    printf("d = %f \n",h_pDescriptor[0 + offset2]);
+	}
 
 #if DEBUG_MAIN
     // Write result to file
@@ -419,7 +392,7 @@ void runTest(int argc, char **argv)
 	cudaFree(d_pNorm); d_pNorm = NULL;
 	cudaFree(d_pOut); d_pOut = NULL;
 
-    free(h_pDescriptor);
+	cudaFreeHost(h_pDescriptor);
 
     checkCudaErrors(cudaFree(dData));
     checkCudaErrors(cudaFreeArray(cuArray));

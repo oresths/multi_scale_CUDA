@@ -35,7 +35,7 @@ __global__ void d_voc_compute_block_energy(int blocks_0, int blocks_1,
     }
 }
 
-__host__ int voc_compute_block_energy(int blocks_0, int blocks_1, float* d_pHists, float* d_pNorms)
+__host__ int voc_compute_block_energy(int blocks_0, int blocks_1, float* d_pHists, float* d_pNorms, cudaStream_t streams)
 {
     dim3 grid;
     grid.x = (int)ceil((blocks_1+7) / 8);
@@ -50,7 +50,7 @@ __host__ int voc_compute_block_energy(int blocks_0, int blocks_1, float* d_pHist
 	startTimer(&tt);
 #endif
 
-    d_voc_compute_block_energy<<< grid , threads >>>(blocks_0, blocks_1, d_pHists, d_pNorms);
+    d_voc_compute_block_energy<<< grid , threads, 0, streams >>>(blocks_0, blocks_1, d_pHists, d_pNorms);
         ONFAIL("compute_blocks kernel failed");
 
 #ifdef DEBUG_TIME_EACH_STEP
@@ -255,7 +255,7 @@ __global__ void d_voc_compute_features /*__traceable__*/ (int out_0, int out_1,
 
 __host__ int voc_compute_features(int blocks_0, int blocks_1, 
                                         float* d_pHists, float* d_pNorms, 
-                                        float* d_pOut)
+                                        float* d_pOut, cudaStream_t streams)
 {
     dim3 grid;
     grid.x = (int)ceil((blocks_1+7) / 8);
@@ -276,7 +276,7 @@ __host__ int voc_compute_features(int blocks_0, int blocks_1,
 	startTimer(&tt);
 #endif
 
-    d_voc_compute_features<<< grid , threads >>> /*__traceable_call__*/ (out[0], out[1], 
+    d_voc_compute_features<<< grid , threads, 0, streams >>> /*__traceable_call__*/ (out[0], out[1],
             blocks_0, blocks_1, d_pHists, d_pNorms, d_pOut);
         ONFAIL("compute_blocks kernel failed");
 
